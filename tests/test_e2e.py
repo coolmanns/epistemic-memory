@@ -2,6 +2,9 @@
 
 These tests run against the REAL lcm.db with the real embedding service.
 They create a temporary epistemic.db to avoid polluting production.
+
+NOTE: These are marked @pytest.mark.slow and skipped by default.
+Run with: pytest tests/test_e2e.py -m slow
 """
 
 import sqlite3
@@ -31,6 +34,7 @@ def real_setup(tmp_path):
 
 
 # --- T8.1: Fresh start with all real summaries ---
+@pytest.mark.slow
 class TestT8_1_FreshStart:
     def test_discovery_on_real_data(self, real_setup):
         """Run full discovery on real lcm.db — should produce topics close to POC (19 clusters)."""
@@ -67,6 +71,7 @@ class TestT8_1_FreshStart:
 
 
 # --- T8.2: Incremental tagging after discovery ---
+@pytest.mark.slow
 class TestT8_2_IncrementalTag:
     def test_tag_after_discovery(self, real_setup):
         """Run discovery first, then tagging — new summaries should tag to existing topics."""
@@ -96,6 +101,7 @@ class TestT8_2_IncrementalTag:
 
 
 # --- T8.4: Full pipeline ---
+@pytest.mark.slow
 class TestT8_4_FullPipeline:
     def test_full_pipeline(self, real_setup):
         """Discovery → Tag → Orphan check → all complete without errors."""
@@ -144,6 +150,7 @@ class TestT8_4_FullPipeline:
 
 
 # --- Verify lcm.db was never written to ---
+@pytest.mark.slow
 class TestLcmReadOnly:
     def test_lcm_untouched(self, real_setup):
         """After full pipeline, lcm.db should have no evidence of writes."""

@@ -21,9 +21,9 @@ LCM_DB = Path(_env("LCM_DB", os.path.expanduser("~/.openclaw/lcm.db")))
 EPISTEMIC_DB = Path(_env("EPISTEMIC_DB", os.path.expanduser("~/.openclaw/data/epistemic.db")))
 
 # --- Embedding ---
-EMBED_BASE_URL = _env("EMBED_BASE_URL", "http://localhost:8082")
-EMBED_MODEL = _env("EMBED_MODEL", "nomic-embed-text")
-EMBED_TIMEOUT = _env("EMBED_TIMEOUT", 30, cast=int)
+EMBED_BASE_URL = _env("EMBED_BASE_URL", "http://localhost:8086")
+EMBED_MODEL = _env("EMBED_MODEL", "Qwen3-Embedding-4B-Q6_K.gguf")
+EMBED_TIMEOUT = _env("EMBED_TIMEOUT", 60, cast=int)
 
 # --- LLM (topic labeling) ---
 LLM_BASE_URL = _env("LLM_BASE_URL", "http://localhost:8084")
@@ -44,4 +44,16 @@ MAX_TOPICS_PER_RUN = _env("MAX_TOPICS_PER_RUN", 20, cast=int)
 MAX_ORPHAN_RATIO = _env("MAX_ORPHAN_RATIO", 0.3, cast=float)
 
 # --- Embedding Dimensions ---
-EMBED_DIM = _env("EMBED_DIM", 768, cast=int)
+EMBED_DIM = _env("EMBED_DIM", 2560, cast=int)
+
+# --- Phase 2: Synthesis ---
+CLAIM_DEDUP_THRESHOLD = _env("CLAIM_DEDUP_THRESHOLD", 0.90, cast=float)
+MIN_CLAIMS_FOR_SYNTHESIS = _env("MIN_CLAIMS_FOR_SYNTHESIS", 3, cast=int)
+MAX_CLAIMS_PER_EXTRACTION = _env("MAX_CLAIMS_PER_EXTRACTION", 15, cast=int)
+MAX_CLAIM_LENGTH = _env("MAX_CLAIM_LENGTH", 500, cast=int)
+SYNTHESIS_OUTPUT_DIR = Path(_env("SYNTHESIS_OUTPUT_DIR", os.path.expanduser("~/clawd/memory/topics")))
+
+# --- Claim Decay ---
+CLAIM_DECAY_HIGH_DAYS = _env("CLAIM_DECAY_HIGH_DAYS", 90, cast=int)
+CLAIM_DECAY_MED_DAYS = _env("CLAIM_DECAY_MED_DAYS", 60, cast=int)
+CLAIM_DECAY_LOW_DAYS = _env("CLAIM_DECAY_LOW_DAYS", 60, cast=int)

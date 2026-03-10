@@ -23,6 +23,12 @@ from src.tagger import Tagger
 from src.discovery import Discovery
 from src.orphans import OrphanReconciler
 from src.labels import TopicLabeler
+from src.extractor import ClaimExtractor
+from src.dedup import ClaimDeduplicator
+from src.verifier import ClaimVerifier
+from src.synthesizer import Synthesizer
+from src.writer import OutputWriter
+from src.decay import ClaimDecay
 from src import config
 
 LOG_FILE = Path.home() / "clawd/logs/epistemic-synthesis.log"
@@ -85,17 +91,92 @@ def run_orphan() -> dict:
     return stats
 
 
+def run_extract() -> list[dict]:
+    """Extract claims from all topics with new summaries."""
+    log.info("Starting claim extraction")
+    ex = ClaimExtractor()
+    stats = ex.run()
+    total = sum(s["extracted"] for s in stats)
+    errors = sum(s["errors"] for s in stats)
+    log.info(f"Extraction: {total} claims from {len(stats)} topics, {errors} errors")
+    return stats
+
+
+def run_dedup() -> list[dict]:
+    """Deduplicate claims within all topics."""
+    log.info("Starting claim deduplication")
+    dd = ClaimDeduplicator()
+    stats = dd.run()
+    total_merged = sum(s["merged"] for s in stats)
+    log.info(f"Dedup: {total_merged} merged across {len(stats)} topics")
+    return stats
+
+
+def run_verify() -> list[dict]:
+    """Verify all active claims."""
+    log.info("Starting claim verification")
+    v = ClaimVerifier()
+    stats = v.run()
+    total_v = sum(s["verified"] for s in stats)
+    total_u = sum(s["unsupported"] for s in stats)
+    log.info(f"Verify: {total_v} verified, {total_u} unsupported across {len(stats)} topics")
+    return stats
+
+
+def run_synthesize() -> list[dict]:
+    """Generate synthesis documents for all topics."""
+    log.info("Starting synthesis generation")
+    s = Synthesizer()
+    stats = s.run()
+    generated = sum(1 for st in stats if st["version"] > 0)
+    log.info(f"Synthesis: {generated}/{len(stats)} topics synthesized")
+    return stats
+
+
+def run_write() -> list:
+    """Write injection briefs to memory/topics/."""
+    log.info("Starting output write")
+    w = OutputWriter()
+    paths = w.write_all()
+    log.info(f"Write: {len(paths)} topic files written to {config.SYNTHESIS_OUTPUT_DIR}")
+    return [str(p) for p in paths]
+
+
+def run_decay() -> dict:
+    """Process claim decay."""
+    log.info("Starting claim decay")
+    d = ClaimDecay()
+    stats = d.run()
+    log.info(f"Decay: {stats['total_processed']} claims processed")
+    return stats
+
+
+def run_full_synthesis() -> dict:
+    """Full synthesis pipeline: extract → dedup → verify → synthesize → write."""
+    log.info("Starting full synthesis pipeline")
+    results = {}
+    results["extract"] = run_extract()
+    results["dedup"] = run_dedup()
+    results["verify"] = run_verify()
+    results["synthesize"] = run_synthesize()
+    results["write"] = run_write()
+    return results
+
+
 def run_full() -> dict:
-    """Full pipeline: discover + tag + label + orphan."""
+    """Full pipeline: discover + tag + label + orphan + synthesis."""
     results = {}
     results["discovery"] = run_discover()
     results["orphans"] = run_orphan()
+    results["synthesis"] = run_full_synthesis()
     return results
 
 
 def main():
     parser = argparse.ArgumentParser(description="Epistemic Synthesis runner")
-    parser.add_argument("mode", choices=["tag", "discover", "orphan", "full"], help="Run mode")
+    parser.add_argument("mode", choices=["tag", "discover", "orphan", "extract", "dedup",
+                                         "verify", "synthesize", "write", "decay",
+                                         "full-synthesis", "full"], help="Run mode")
     parser.add_argument("--json", action="store_true", help="Output stats as JSON")
     args = parser.parse_args()
 
@@ -110,6 +191,20 @@ def main():
             stats = run_discover()
         elif args.mode == "orphan":
             stats = run_orphan()
+        elif args.mode == "extract":
+            stats = run_extract()
+        elif args.mode == "dedup":
+            stats = run_dedup()
+        elif args.mode == "verify":
+            stats = run_verify()
+        elif args.mode == "synthesize":
+            stats = run_synthesize()
+        elif args.mode == "write":
+            stats = run_write()
+        elif args.mode == "decay":
+            stats = run_decay()
+        elif args.mode == "full-synthesis":
+            stats = run_full_synthesis()
         elif args.mode == "full":
             stats = run_full()
 

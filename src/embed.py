@@ -1,6 +1,6 @@
 """Epistemic Synthesis — Embedding Client
 
-Thin wrapper around nomic-embed HTTP API (OpenAI-compatible /v1/embeddings).
+Thin wrapper around Qwen3-Embedding-8B HTTP API (OpenAI-compatible /v1/embeddings).
 Handles single and batch embedding, normalization, and error recovery.
 """
 
@@ -20,7 +20,7 @@ class EmbedError(Exception):
 
 
 class EmbedClient:
-    """Client for nomic-embed text embedding service."""
+    """Client for Qwen3-Embedding-8B text embedding service."""
 
     def __init__(
         self,
@@ -43,7 +43,7 @@ class EmbedClient:
         vectors = self._call_api([text])
         return vectors[0]
 
-    def embed_batch(self, texts: list[str], batch_size: int = 32) -> list[np.ndarray]:
+    def embed_batch(self, texts: list[str], batch_size: int = 8) -> list[np.ndarray]:
         """Embed multiple texts. Returns list of L2-normalized float32 vectors.
 
         Filters out empty strings (returns None in their positions).

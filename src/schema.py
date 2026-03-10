@@ -10,7 +10,7 @@ from typing import Optional
 
 from . import config
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA_SQL = """
 -- Topics: emergent clusters of related summaries
@@ -56,6 +56,93 @@ CREATE TABLE IF NOT EXISTS tagging_log (
     orphans_detected INTEGER DEFAULT 0,
     duration_ms INTEGER DEFAULT 0
 );
+
+-- Phase 2: Atomic claims with provenance
+CREATE TABLE IF NOT EXISTS claims (
+    id INTEGER PRIMARY KEY,
+    topic_id INTEGER NOT NULL REFERENCES topics(id),
+    text TEXT NOT NULL,
+    claim_type TEXT NOT NULL DEFAULT 'factual',
+    confidence TEXT NOT NULL DEFAULT 'MED',
+    status TEXT NOT NULL DEFAULT 'active',
+    source_count INTEGER DEFAULT 1,
+    first_seen TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    last_reinforced TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    embedding BLOB,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- Provenance: which summaries support each claim
+CREATE TABLE IF NOT EXISTS claim_sources (
+    id INTEGER PRIMARY KEY,
+    claim_id INTEGER NOT NULL REFERENCES claims(id),
+    summary_id TEXT NOT NULL,
+    excerpt TEXT NOT NULL,
+    extracted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(claim_id, summary_id)
+);
+
+-- Explicit contradiction tracking
+CREATE TABLE IF NOT EXISTS claim_contradictions (
+    id INTEGER PRIMARY KEY,
+    claim_a_id INTEGER NOT NULL REFERENCES claims(id),
+    claim_b_id INTEGER NOT NULL REFERENCES claims(id),
+    resolution TEXT,
+    resolved_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    CHECK(claim_a_id < claim_b_id)
+);
+
+-- Synthesis artifacts (versioned per topic)
+CREATE TABLE IF NOT EXISTS syntheses (
+    id INTEGER PRIMARY KEY,
+    topic_id INTEGER NOT NULL REFERENCES topics(id),
+    version INTEGER NOT NULL DEFAULT 1,
+    canonical_text TEXT NOT NULL,
+    injection_brief TEXT NOT NULL,
+    claim_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(topic_id, version)
+);
+
+-- Which claims fed into which synthesis
+CREATE TABLE IF NOT EXISTS synthesis_claims (
+    synthesis_id INTEGER NOT NULL REFERENCES syntheses(id),
+    claim_id INTEGER NOT NULL REFERENCES claims(id),
+    weight REAL NOT NULL DEFAULT 1.0,
+    PRIMARY KEY(synthesis_id, claim_id)
+);
+
+-- Track synthesis pipeline runs
+CREATE TABLE IF NOT EXISTS synthesis_runs (
+    id INTEGER PRIMARY KEY,
+    topic_id INTEGER,
+    phase TEXT NOT NULL,
+    stats TEXT,
+    started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    finished_at TEXT,
+    duration_ms INTEGER
+);
+
+-- Phase 2 indexes
+CREATE INDEX IF NOT EXISTS idx_claims_topic
+    ON claims(topic_id);
+
+CREATE INDEX IF NOT EXISTS idx_claims_status
+    ON claims(status);
+
+CREATE INDEX IF NOT EXISTS idx_claim_sources_claim
+    ON claim_sources(claim_id);
+
+CREATE INDEX IF NOT EXISTS idx_claim_sources_summary
+    ON claim_sources(summary_id);
+
+CREATE INDEX IF NOT EXISTS idx_syntheses_topic
+    ON syntheses(topic_id);
+
+CREATE INDEX IF NOT EXISTS idx_synthesis_runs_topic
+    ON synthesis_runs(topic_id);
 
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_meta (
