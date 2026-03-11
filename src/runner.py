@@ -14,6 +14,7 @@ import logging
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -29,6 +30,8 @@ from src.verifier import ClaimVerifier
 from src.synthesizer import Synthesizer
 from src.writer import OutputWriter
 from src.decay import ClaimDecay
+from src.retagger import Retagger
+from src.contradictions import ContradictionDetector, format_report
 from src import config
 
 LOG_FILE = Path.home() / "clawd/logs/epistemic-synthesis.log"
@@ -142,6 +145,44 @@ def run_write() -> list:
     return [str(p) for p in paths]
 
 
+def run_retag(topic_id: Optional[int] = None) -> list[dict] | dict:
+    """Re-tag summaries against specific or all empty topics."""
+    log.info("Starting re-tagging pass")
+    rt = Retagger()
+    if topic_id:
+        stats = rt.retag_topic(topic_id)
+        log.info(f"Re-tag topic {topic_id}: {stats['tagged']} new tags")
+        return stats
+    else:
+        results = rt.retag_new_topics()
+        total = sum(s["tagged"] for s in results)
+        log.info(f"Re-tag: {len(results)} topics processed, {total} total new tags")
+        return results
+
+
+def run_contradictions(topic_id: Optional[int] = None) -> dict:
+    """Run contradiction detection across claims."""
+    log.info("Starting contradiction detection")
+    cd = ContradictionDetector()
+    stats = cd.run(topic_id=topic_id)
+    log.info(
+        f"Contradictions: {stats['contradictions_found']} direct, "
+        f"{stats['temporal_evolutions']} temporal, "
+        f"{stats['nuance_differences']} nuance ({stats['duration_ms']}ms)"
+    )
+    return stats
+
+
+def run_contradiction_report() -> str:
+    """Generate and return a contradiction report."""
+    econn = init_epistemic_db(config.EPISTEMIC_DB)
+    try:
+        report = format_report(econn)
+    finally:
+        econn.close()
+    return report
+
+
 def run_decay() -> dict:
     """Process claim decay."""
     log.info("Starting claim decay")
@@ -176,7 +217,9 @@ def main():
     parser = argparse.ArgumentParser(description="Epistemic Synthesis runner")
     parser.add_argument("mode", choices=["tag", "discover", "orphan", "extract", "dedup",
                                          "verify", "synthesize", "write", "decay",
+                                         "retag", "contradictions", "contradiction-report",
                                          "full-synthesis", "full"], help="Run mode")
+    parser.add_argument("--topic-id", type=int, help="Target topic ID (for retag/contradictions)")
     parser.add_argument("--json", action="store_true", help="Output stats as JSON")
     args = parser.parse_args()
 
@@ -203,6 +246,14 @@ def main():
             stats = run_write()
         elif args.mode == "decay":
             stats = run_decay()
+        elif args.mode == "retag":
+            stats = run_retag(topic_id=args.topic_id)
+        elif args.mode == "contradictions":
+            stats = run_contradictions(topic_id=args.topic_id)
+        elif args.mode == "contradiction-report":
+            report = run_contradiction_report()
+            print(report)
+            stats = {"report_length": len(report)}
         elif args.mode == "full-synthesis":
             stats = run_full_synthesis()
         elif args.mode == "full":

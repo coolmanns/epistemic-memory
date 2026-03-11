@@ -2,8 +2,8 @@
 
 **Authors:** Sascha Kuhlmann & Gandalf (GandalfOfElgin)
 **Date:** March 9, 2026
-**Status:** Draft v0.3.1 — Design Phase (claim-first architecture + literature integration)
-**Changelog:** v0.1 initial design → v0.2 grounding/drift/privacy (peer review) → v0.3 claim-first architecture, typed topics, three-artifact model (peer review) → v0.3.1 deeper literature engagement, A-MEM comparison, benchmark-grounded evaluation
+**Status:** Draft v0.4.1 — Design Phase (multi-source architecture + provenance model)
+**Changelog:** v0.1 initial design → v0.2 grounding/drift/privacy (peer review) → v0.3 claim-first architecture, typed topics, three-artifact model (peer review) → v0.3.1 deeper literature engagement, A-MEM comparison, benchmark-grounded evaluation → v0.4 multi-source knowledge ingestion, provenance chains, checkpoint+delta retrieval model → v0.4.1 verification failure modes, cost projections, evaluation benchmark sketch, topic stability protocol (peer review)
 
 ---
 
@@ -11,9 +11,11 @@
 
 Current AI memory systems store and retrieve information but do not consolidate it into reusable understanding. Systems like LCM (Lossless Context Management) compress conversation history into temporal summaries; vector databases enable semantic search; fact extraction produces entity-key-value triples. None synthesize evolving conceptual understanding across conversations over time.
 
-This paper proposes **Epistemic Synthesis** — a learning architecture for persistent AI agents that discovers topics from conversation data, extracts and verifies atomic claims, builds associative networks between topics, and produces auditable, evolving topic models that represent what the agent has learned about a subject.
+This paper proposes **Epistemic Synthesis** — a learning architecture for persistent AI agents that discovers topics from conversation data and workspace files, extracts and verifies atomic claims, builds associative networks between topics, and produces auditable, evolving topic models that represent what the agent has learned about a subject.
 
 The core architectural decision is **claim-first synthesis**: the unit of epistemic update is the atomic claim with provenance, not the prose document. Understanding documents are generated *from* verified claim sets, not verified *after* generation. This inverts the synthesis pipeline and makes drift detection, contradiction handling, and evaluation tractable.
+
+The v0.4 design extends the architecture to multi-source knowledge ingestion, recognizing that understanding does not originate in files or conversations alone — it emerges from the cyclical interaction between both. A provenance chain model tracks how knowledge flows from generative conversations through crystallized files and back, while a checkpoint + delta retrieval model eliminates redundant loading by treating files as knowledge checkpoints and post-file conversations as the evolutionary delta.
 
 ---
 
@@ -127,6 +129,55 @@ HDBSCAN cluster boundaries shift as new summaries arrive. Mitigation:
 - **Merge detection:** When two topics converge in centroid space and share significant summary overlap, they're flagged for merge.
 - **Versioned snapshots:** Each synthesis version records the topic centroid and member summaries at time of creation.
 
+#### 2.3.2.1 Claim Reassignment Protocol
+
+Topic splits and merges are where the messiest data integrity issues live. Claims, edges, and synthesis versions all need consistent handling. The following protocol specifies the operations:
+
+**On topic split** (Topic A → Topic A' + Topic B'):
+
+```
+1. Recluster: Re-embed all claims in Topic A. Assign each claim to A' or B'
+   based on embedding proximity to the new centroids.
+2. Provenance follows: claim_sources entries move with their claims unchanged.
+   The source summaries don't change — only which topic the claim belongs to.
+3. Contradictions re-evaluate: If claim_a and claim_b (previously contradicting
+   within Topic A) land in different sub-topics, the contradiction is
+   demoted to a cross-topic tension — still tracked, but no longer an
+   intra-topic Active Tension.
+4. Edges redistribute: Topic A's edges to other topics are copied to both A'
+   and B', weighted by the proportion of claims each inherited. An edge
+   with weight 0.7 where A' got 60% of claims → A' inherits 0.42, B' gets 0.28.
+5. Synthesis invalidated: Both A' and B' get status 'needs_synthesis'.
+   Previous synthesis versions for Topic A get status 'superseded_by_split'.
+6. Human notification: Splits are surfaced for review. Automated splits
+   above a configurable claim count threshold require approval.
+```
+
+**On topic merge** (Topic A + Topic B → Topic C):
+
+```
+1. Union: All claims from A and B move to C.
+2. Deduplication: Cross-topic claims with embedding similarity > 0.92 are
+   merged. The version with higher support_count survives; the other's
+   unique sources are added to claim_sources.
+3. Contradiction discovery: Claims that were independent in separate topics
+   may contradict each other. Run pairwise contradiction detection on
+   the merged claim set.
+4. Edges merge: C inherits the union of A and B's edges. Where both had
+   edges to the same topic, take max(weight).
+5. Centroid recompute: C's centroid is computed from the merged claim set,
+   not averaged from A and B's centroids.
+6. Synthesis required: C gets status 'needs_synthesis'. Previous versions
+   for A and B get status 'superseded_by_merge'.
+```
+
+**Invariants that must hold after any split/merge:**
+- Every claim belongs to exactly one topic
+- Every claim_source entry points to a valid claim
+- No orphaned contradiction entries
+- Edge weights sum to ≤ 1.0 per pair
+- At least one synthesis version exists with status 'current' or 'needs_synthesis' per topic
+
 ### 2.4 Phase 3 — Claim Extraction & Synthesis (Overnight)
 
 **Trigger:** Overnight batch, for topics that received new tagged summaries since last synthesis
@@ -195,6 +246,8 @@ DO NOT:
 - Assert confidence where the sources are tentative
 ```
 
+**Known limitation (v0.4.1):** The current extractor sends *all* tagged summaries for a topic in a single LLM call with a hard cap (`MAX_CLAIMS_PER_EXTRACTION`, default 15). For content-rich topics (e.g., 74+ summaries), this forces the LLM to aggressively compress — losing granularity. The planned fix is **batched extraction**: send summaries in groups of 10–15, extract claims per batch, then deduplicate across batches. This preserves fine-grained facts while keeping per-call cost bounded. Note: claims are an intermediate representation feeding synthesis; raw conversation content remains fully accessible via LCM drill-down regardless of claim count.
+
 #### 2.4.2 Claim Verification
 
 After extraction, a separate verification pass checks grounding at the individual claim level:
@@ -214,6 +267,28 @@ Output per claim: VERIFIED | UNSUPPORTED | OVERSTATED | MISATTRIBUTED
 Claims that fail verification are flagged but not deleted — they enter the evidence ledger with status `unsupported` for human review. Only `VERIFIED` claims feed into synthesis document generation.
 
 **Why claim-level verification beats document-level:** A document-level verifier can pass a synthesis that is "mostly right" while containing subtle overgeneralizations. Claim-level verification catches: incorrect abstraction from true details, style-induced confidence inflation, and confirmation of vaguely-supported assertions. Each failure is localized and traceable.
+
+#### 2.4.2.1 Verification Failure Modes
+
+The verification pass is load-bearing in the anti-drift architecture — and it is itself an LLM call. This creates a fundamental limitation that must be stated explicitly: **an LLM verifying another LLM's extraction is a probabilistic filter, not a guarantee.**
+
+Known failure modes of the verification layer:
+
+| Failure Mode | Description | Risk Level |
+|-------------|-------------|------------|
+| **Same-model confirmation bias** | If the same model extracts and verifies a claim, it may reproduce its own reasoning patterns rather than independently checking | HIGH if same model; MEDIUM with model diversity |
+| **Plausible-sounding confabulation** | A well-formed abductive claim with plausible reasoning may pass verification even when the source doesn't actually support it | MEDIUM — abductive and analogical claims most vulnerable |
+| **Source summary compression** | Verification checks claims against LCM summaries, not raw conversation text. If the summary already lost relevant nuance, verification can't recover it | LOW-MEDIUM — depends on LCM compaction quality |
+| **Confidence inflation** | The verifier may accept an overstated confidence level because the claim is directionally correct | MEDIUM — mitigated by explicit confidence criteria |
+
+**Mitigations (layered, not reliant on any single check):**
+
+1. **Model diversity:** Use a different model for verification than extraction where feasible. At minimum, use different prompts and temperature settings.
+2. **Monthly re-verification:** The primary-source audit (Section 4.3) re-checks HIGH claims on a different temporal context, which changes what the model attends to. This is not independent verification, but it is decorrelated verification.
+3. **Human audit surface:** The evidence ledger is designed for human readability. When verification fails silently, the human reviewing the ledger is the actual backstop. This is why auditability matters more than verification accuracy — the system is designed to make failures *visible*, not to prevent them entirely.
+4. **Statistical monitoring:** Track verification pass rates per claim type. If abductive claims pass at the same rate as extractive claims, the verifier is likely not discriminating effectively.
+
+**The honest framing:** Verification *reduces* drift probability per claim. It does not *prevent* drift. The actual safety net is the combination of verification + decay + re-verification + human auditability. No single layer is sufficient. The architecture accepts this and stacks probabilistic defenses rather than claiming any one is reliable.
 
 #### 2.4.3 Canonical Synthesis Generation
 
@@ -281,6 +356,40 @@ The injection brief is what enters the conversation context. The canonical synth
 | **Evidence Ledger** | Source of truth — atomic claims with provenance | On every claim extraction pass | Grows over time | Verification, audit, debugging |
 | **Canonical Synthesis** | Structured understanding — epistemic register | When claim set changes materially | 800-2000 tokens | Human review, detailed reference |
 | **Injection Brief** | Runtime context — compressed, query-optimized | When canonical synthesis updates | 200-400 tokens | LLM context window |
+
+### 2.6 Cost Model
+
+The overnight batch pipeline's cost scales with the number of topics receiving new material, not the total topic count. This distinction is critical for feasibility assessment.
+
+**Per-topic synthesis cost (Phase 3):**
+
+| Operation | LLM Calls | Est. Input Tokens | Est. Output Tokens |
+|-----------|-----------|-------------------|-------------------|
+| LCM expand (retrieve summaries) | 0 (API call) | — | — |
+| Claim extraction | 1 | 2,000–8,000 | 500–2,000 |
+| Claim verification | 1 | 1,500–5,000 | 200–800 |
+| Synthesis generation | 1 | 1,000–4,000 | 800–2,000 |
+| Brief generation | 1 | 800–2,000 | 200–400 |
+| **Total per topic** | **4** | **5,300–19,000** | **1,700–5,200** |
+
+**Projected batch costs at scale (using approximate API pricing):**
+
+| Timeframe | Topics | Active/week (~20%) | Batch cost/night | Monthly |
+|-----------|--------|-------------------|-----------------|---------|
+| 1 month | 20 | 4 | ~$0.03–0.10 | ~$1–3 |
+| 6 months | 300 | 60 | ~$0.50–1.50 | ~$15–45 |
+| 1 year | 750 | 150 | ~$1.20–3.80 | ~$36–114 |
+| 3 years | 3,000 | 600 | ~$5–15 | ~$150–450 |
+
+*Estimates assume Sonnet-class pricing (~$3/M input, ~$15/M output). Local model execution (e.g., llama.cpp for extraction) would reduce costs significantly for the extraction and brief generation steps, reserving frontier model budget for verification and synthesis where quality matters most.*
+
+**Cost mitigation strategies:**
+1. **Tiered model assignment:** Use local models for extraction and brief generation (lower-stakes operations). Reserve frontier models for verification and synthesis.
+2. **Materiality threshold:** Only trigger resynthesis when new claims materially change the evidence ledger (e.g., >10% claim change or new contradiction detected), not on every new tagged summary.
+3. **Batch consolidation:** If a topic receives new material on 5 consecutive days, synthesize once at week's end rather than nightly.
+4. **Claim extraction caching:** If a summary has already been processed for claim extraction and hasn't changed, skip it on subsequent runs.
+
+At the 1-year mark with 750 topics, the monthly cost ($36–114) is comparable to a single premium API subscription — manageable for a personal agent where the value proposition is accumulated knowledge. At the 3-year mark, cost optimization becomes mandatory, but by then the tiered model and materiality threshold strategies should be well-tuned from operational data.
 
 ---
 
@@ -726,9 +835,183 @@ The test cases that would demonstrate synthesis beyond retrieval:
 
 If the system produces these outputs with proper grounding and verifiable provenance, it is doing something that pure retrieval cannot match — regardless of what we call it.
 
+### 9.4 Toward a Synthetic Benchmark for Synthesis Quality
+
+No existing benchmark tests whether a system has consolidated information into reusable understanding. Building one requires controllable ground truth. The following sketch outlines what such a benchmark could look like:
+
+**SynthEval: A Synthetic Benchmark for Epistemic Synthesis**
+
+**Construction:**
+
+```
+1. Design 10-20 topics, each with a known "ground truth" understanding
+   that includes:
+   - 5-10 established claims
+   - 2-3 active contradictions (claims that genuinely conflict)
+   - 1-2 temporal evolutions (a position that changed over time)
+   - 1-2 cross-topic connections
+
+2. Generate synthetic conversation histories (15-30 conversations per
+   topic) that embed the ground-truth claims across sessions:
+   - Some claims stated explicitly (extractive ground truth)
+   - Some inferable from patterns across conversations (abductive)
+   - Contradictions distributed across different time periods
+   - Position changes occurring at known conversation boundaries
+
+3. Feed the conversation histories through the epistemic pipeline.
+
+4. Evaluate the output against ground truth.
+```
+
+**Proposed metrics:**
+
+| Metric | Measures | Ground Truth Available? |
+|--------|----------|----------------------|
+| **Claim recall** | Did the system extract the known claims? | Yes — compare against planted claims |
+| **Claim precision** | Did the system avoid hallucinated claims? | Yes — anything not in the planted set is false |
+| **Contradiction preservation** | Are planted contradictions in Active Tensions, not resolved? | Yes — known contradiction pairs |
+| **Temporal fidelity** | Does the system reflect the final position after an evolution? | Yes — known evolution endpoints |
+| **Confidence calibration** | Do multi-source claims get higher confidence than single-source? | Yes — support count is controlled |
+| **Cross-topic linkage** | Did the system discover planted cross-topic connections? | Yes — known connection points |
+
+**Limitations of this approach:**
+
+- Synthetic conversations lack the messiness of real dialogue (REALTALK demonstrates this gap)
+- Ground truth is planted by the benchmark designer, introducing designer bias
+- Tests the pipeline's ability to recover *known* knowledge, not its ability to discover *novel* understanding — which is arguably the system's primary value proposition
+
+This benchmark is constructable with current tools and would provide the first quantitative evaluation of synthesis quality distinct from retrieval accuracy. It would not validate the system's performance on real conversations — but it would establish a baseline and catch regressions.
+
 ---
 
-## 10. Open Questions
+## 10. Multi-Source Knowledge Ingestion
+
+### 10.1 The Single-Source Limitation
+
+Sections 1–9 assume a single knowledge source: LCM conversation summaries. In practice, a persistent agent's knowledge is distributed across two fundamentally different substrates:
+
+1. **Conversations** — the generative medium where ideas originate, get debated, refined, and stress-tested
+2. **Files** — the artifacts where knowledge crystallizes: project documentation, call transcripts, strategy documents, research notes, code
+
+The current architecture ingests only conversation summaries. When a human hands the agent a 45-minute client call transcript, the agent reads it, summarizes it in conversation, and that summary enters LCM. The epistemic system then extracts claims from a summary of a summary of the original material. This is a lossy pipeline — the richness of the source is filtered through two compression layers before reaching the claim extractor.
+
+### 10.2 The Provenance Problem
+
+The naive assumption — "files are primary sources, conversations are secondary" — is wrong. Knowledge does not originate in files. It originates in conversations.
+
+Consider the development of this very system: Epistemic Synthesis emerged from dozens of conversations — architectural debates, whitepaper drafts, peer reviews, pushback sessions where ideas were killed or refined. The whitepaper is not the source of the knowledge; it is a *crystallization* of knowledge that was generated through dialogue. The GitHub README crystallizes the crystallization further.
+
+Conversely, when the human asks the agent to read a client transcript and discuss it, the conversation *about* the file generates new understanding that goes beyond what the file contains. The file is the starting material; the conversation is the refinement.
+
+Neither conversations nor files are "the source." **Understanding emerges from the interaction between both.** The relationship is not hierarchical but cyclical:
+
+```
+Conversations (generative)
+  → insights emerge
+    → files written (crystallized)
+      → files discussed further (refined)
+        → files updated (evolved)
+          → new conversations reference updated files
+```
+
+This means the epistemic system cannot simply ingest files alongside conversations and weight them independently. It must model the **provenance chain** — the lineage through which a piece of knowledge traveled from origin to current form.
+
+### 10.3 The Checkpoint + Delta Model
+
+A practical retrieval model emerges from acknowledging the cyclical relationship:
+
+**A file is a checkpoint.** It represents the crystallized state of knowledge about a topic as of its last modification date. Everything the human and agent knew, discussed, and decided about that topic — up to that point — is captured in the file.
+
+**Conversations after the checkpoint are the delta.** Any discussions that occurred after the file was last modified represent evolution, revision, or expansion of the knowledge the file contains.
+
+```
+Current understanding of Topic X =
+  File(s) for Topic X (checkpoint, last modified T₁)
+  + Conversations about Topic X since T₁ (delta)
+```
+
+This model has several advantages:
+
+1. **Eliminates redundant retrieval.** Conversations that occurred before T₁ are already absorbed into the file. Retrieving them alongside the file double-counts.
+2. **Reduces token cost.** The file is typically more compressed than the sum of conversations it synthesizes.
+3. **Naturally handles staleness.** A file modified 6 months ago with 50 conversations since has a large delta — signaling the file needs updating. A file modified yesterday with zero conversations since has no delta — the checkpoint is current.
+4. **Matches human intuition.** "Let me check my notes, and what have we discussed since then?" is the natural information-seeking pattern.
+
+### 10.4 Unsolved: Multi-Source Topic Mapping
+
+The checkpoint + delta model works cleanly for the single-file case. Real topics have multiple files and multiple conversation threads. This creates hard problems:
+
+#### 10.4.1 Multiple Files Per Topic
+
+A client topic like "Martin Ball" might have:
+- `projects/martin-ball/PROJECT.md` (project status, last modified Mar 8)
+- `projects/martin-ball/transcripts/call-2026-03-10.md` (call transcript, Mar 10)
+- `projects/martin-ball/strategy.md` (business strategy, Mar 5)
+- `projects/martin-ball/website-audit.md` (SEO audit, Feb 28)
+
+Each file has a different last-modified date. Each represents a different facet of the topic. Which is "the checkpoint"? All of them? The newest? Do we merge them into a single baseline?
+
+The answer likely depends on the query. If the question is about SEO performance, the website audit is the relevant checkpoint. If it's about overall client status, the PROJECT.md is primary. **The checkpoint is query-conditioned, not fixed per topic.**
+
+#### 10.4.2 Overlapping and Duplicate Files
+
+The agent writes a strategy document. A week later, the human asks for a "Martin Ball overview" and the agent covers half the same ground. Now two files claim to be checkpoints for overlapping knowledge. Using both as baselines double-counts. Picking one loses what's unique to the other.
+
+This requires **file-level deduplication** — semantic comparison between files within a topic to identify overlap, unique content, and supersession relationships. A file that is a strict subset of a later file can be treated as superseded. Files with partial overlap need their unique contributions extracted.
+
+#### 10.4.3 Multiple Conversation Threads
+
+Conversations about Martin Ball span SEO discussions, business strategy sessions, website redesign threads, and psychedelic space positioning. Some are 90% about Martin Ball; others mention him in passing. Relevance is not binary — it's a spectrum, and a conversation might be relevant to the SEO facet but not the business strategy facet of the same topic.
+
+#### 10.4.4 The Mapping Problem
+
+Before solving retrieval, the system must solve **topic-to-source mapping**: which files and which conversations authoritatively belong to a topic? The current system maps LCM summaries to topics via embedding similarity. Adding files requires a parallel mapping — potentially using semantic search (e.g., GrepAI, which already indexes the workspace) to discover relevant files per topic.
+
+But embedding similarity alone produces fuzzy matches. A file about "SEO best practices" might match both the "Martin Ball" topic (he's an SEO client) and the "SEO Growth Strategy" topic (general methodology). The mapping needs to be **aware of partial relevance** — a file can belong to multiple topics with different weights.
+
+### 10.5 Retrieval Architecture
+
+Assuming the mapping problem is solved, the retrieval stack for topic activation becomes three layers:
+
+```
+Topic activated →
+  Layer 1: Synthesis brief (epistemic DB — compressed understanding)
+  Layer 2: LCM expand (conversation depth — delta since checkpoint)
+  Layer 3: File retrieval (file depth — checkpoint content)
+```
+
+Each layer goes deeper only when needed. The synthesis brief (Layer 1) handles most queries. When the agent needs more detail, it drills into conversations (Layer 2) or source files (Layer 3).
+
+**Layer 3 retrieval** leverages existing infrastructure: GrepAI provides semantic search over the workspace filesystem with pre-computed embeddings and file-change watching. The epistemic system does not need its own file crawler — it queries GrepAI for files relevant to the activated topic, filtered by the topic-to-file mapping.
+
+**Time-filtered retrieval** applies the checkpoint + delta model: for each relevant file, retrieve only LCM summaries with timestamps *after* that file's last modification. This eliminates the redundancy of loading conversations that the file already represents.
+
+### 10.6 Impact on the Claim Pipeline
+
+File-sourced claims differ from conversation-sourced claims in important ways:
+
+1. **Provenance tracking** expands. Each claim needs a source type (`lcm_summary` | `file`) and, for file sources, a file path and modification timestamp.
+2. **Verification changes.** A claim extracted from a file the agent itself wrote has a different verification profile than a claim from a client transcript the human provided. The agent's own files may contain its own prior confabulations — they should not be treated as independent corroboration.
+3. **Deduplication across sources.** The same knowledge will appear in both files and conversations. The dedup layer (currently embedding-based cosine similarity) must handle cross-source matches — keeping the most refined version regardless of source type.
+4. **The origination chain matters for supersession.** If a conversation claim was later crystallized into a file, and the file was later discussed and revised in a subsequent conversation, the supersession chain is: conversation₁ → file → conversation₂. The latest point in the chain is the current truth, regardless of source type.
+
+### 10.7 Design Principles
+
+From this analysis, several design principles emerge:
+
+1. **Neither source type is inherently primary.** Weight by recency and refinement stage, not by whether it came from a file or a conversation.
+2. **The checkpoint is query-conditioned.** Different files serve as checkpoints for different facets of the same topic.
+3. **Provenance is a chain, not a label.** The system must track how knowledge flows between conversations and files, not just which source it was extracted from.
+4. **Get the storage model right first.** Every downstream operation — sourcing, synthesis, retrieval, injection — depends on the data model. An incorrect storage model creates compounding errors across all layers.
+5. **Existing infrastructure handles file retrieval.** GrepAI for file discovery, LCM for conversation history. The epistemic system orchestrates; it doesn't duplicate.
+
+### 10.8 Status
+
+Multi-source ingestion is at the design stage. The current implementation processes only LCM summaries. The problems identified in Sections 10.4–10.6 — multi-file mapping, overlap detection, query-conditioned checkpoints, cross-source deduplication — require formal specification before implementation. The risk of building on an incorrect storage model is that every downstream layer inherits the error, creating multiple adjustment points instead of one.
+
+---
+
+## 11. Open Questions
 
 1. **Topic split/merge mechanics:** How are claims reassigned during splits? How are contradictory synthesis documents merged? This needs formal specification.
 
@@ -742,9 +1025,17 @@ If the system produces these outputs with proper grounding and verifiable proven
 
 6. **Claim-level query conditioning:** Future activation should weight claims by relevance to the current query, not just topic similarity. This is the refinement from static spreading activation to dynamic, context-aware retrieval.
 
+7. **Topic-to-file mapping:** How does the system discover and maintain authoritative mappings between topics and workspace files? Embedding similarity alone produces fuzzy, potentially incorrect mappings. Manual declaration doesn't scale. The solution likely combines semantic search with co-reference signals (files mentioned in tagged conversations).
+
+8. **Query-conditioned checkpoints:** When multiple files exist for a topic, which serves as the retrieval checkpoint? Static assignment is insufficient — the relevant checkpoint depends on the current query's facet of the topic. This requires either faceted topic modeling or runtime checkpoint selection.
+
+9. **Cross-source claim deduplication:** How to handle identical knowledge appearing in both files and conversations without double-counting, while preserving the most refined version? The origination chain (conversation → file → conversation) complicates simple recency-based supersession.
+
+10. **Agent-authored file verification:** Files written by the agent may contain prior confabulations. Treating agent-authored files as independent corroboration creates a feedback loop analogous to the Lobster Confabulation (Appendix A). The verification pass must distinguish between human-provided files and agent-generated files.
+
 ---
 
-## 11. Implementation Roadmap
+## 12. Implementation Roadmap
 
 | Phase | Scope | Dependencies |
 |-------|-------|-------------|
@@ -756,18 +1047,23 @@ If the system produces these outputs with proper grounding and verifiable proven
 | **Phase 5** | Evaluation framework, activation logging, threshold tuning | 30+ days of operational data |
 | **Phase 6** | Active context injection via LCM assembler | lossless-claw PR or hook |
 | **Phase 7** | Associative network, spreading activation, edge/claim decay | Phase 1-6 stable |
+| **Phase 8** | Multi-source data model: provenance chains, source types, file-to-topic mapping | Phase 7 stable, GrepAI |
+| **Phase 9** | File ingestion pipeline: claim extraction from workspace files, cross-source dedup | Phase 8 schema |
+| **Phase 10** | Checkpoint + delta retrieval: query-conditioned file checkpoints, time-filtered LCM | Phase 9, GrepAI integration |
 
 ---
 
-## 12. Conclusion
+## 13. Conclusion
 
-Epistemic Synthesis addresses a genuine gap in AI memory architecture: the absence of structured, auditable topic understanding that evolves over time. By treating conversation summaries as raw material for bottom-up topic discovery, extracting and verifying atomic claims, building associative networks between topics, and generating synthesis documents from verified claim sets, the system bridges the gap between episodic memory (what happened) and semantic knowledge (what has been learned).
+Epistemic Synthesis addresses a genuine gap in AI memory architecture: the absence of structured, auditable topic understanding that evolves over time. By treating conversation summaries — and, in future phases, workspace files — as raw material for bottom-up topic discovery, extracting and verifying atomic claims, building associative networks between topics, and generating synthesis documents from verified claim sets, the system bridges the gap between episodic memory (what happened) and semantic knowledge (what has been learned).
 
 The core architectural decision — claim-first synthesis — makes the system auditable, drift-resistant, and evaluable in ways that document-first approaches cannot achieve. The unit of epistemic update is the claim, not the document. Documents are views; claims are truth.
 
+The v0.4 design recognizes that knowledge does not live in one place. Conversations are the generative medium where understanding originates. Files are the crystallized artifacts where it lands. Neither is "the source" — understanding emerges from the interaction between both, flowing cyclically from conversations to files and back. The checkpoint + delta retrieval model reflects this reality: files serve as checkpoints of crystallized knowledge, conversations since the checkpoint serve as the evolutionary delta. Getting this multi-source storage model right is prerequisite to everything downstream — sourcing, synthesis, retrieval, and injection all inherit correctness or error from the foundation.
+
 The architecture is designed for personal persistent agents — systems that serve one human over months or years, where accumulated knowledge is the primary value proposition. It is complementary to existing memory systems rather than a replacement.
 
-The primary risks are synthesis quality (addressed through claim-level extraction and verification), feedback loop drift (addressed through primary-source grounding and no document-to-document inheritance), and evaluation difficulty (addressed through a multi-dimensional metric framework). The honest acknowledgment: measuring whether an AI system "understands" a topic remains an open problem. What we can measure is whether it performs better with structured topic models than without — and that is sufficient to validate the architecture empirically.
+The primary risks are synthesis quality (addressed through claim-level extraction and verification), feedback loop drift (addressed through primary-source grounding and no document-to-document inheritance), multi-source complexity (addressed through provenance chains and query-conditioned checkpoints), and evaluation difficulty (addressed through a multi-dimensional metric framework). The honest acknowledgment: measuring whether an AI system "understands" a topic remains an open problem. What we can measure is whether it performs better with structured topic models than without — and that is sufficient to validate the architecture empirically.
 
 ---
 
@@ -793,7 +1089,7 @@ No architecture eliminates all confabulation. But claim-first synthesis makes ea
 
 ---
 
-*This paper describes work in progress. The POC (topic clustering) is complete. Implementation as an OpenClaw plugin is planned. v0.3.1 incorporates architectural feedback from two independent AI peer reviews and deeper engagement with the agent memory literature.*
+*This paper describes work in progress. Phase 1 (topic discovery/tagging) and Phase 2 (claim extraction/synthesis) are implemented and running in production. v0.4.1 incorporates multi-source knowledge ingestion design, provenance chain modeling, checkpoint + delta retrieval architecture, explicit verification failure mode analysis, cost projections, a synthetic benchmark sketch, and topic split/merge protocols — motivated by operational experience and peer review.*
 
 ---
 

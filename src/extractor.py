@@ -22,6 +22,8 @@ logger = logging.getLogger("epistemic")
 
 EXTRACTION_PROMPT = """Extract atomic claims from the following summaries about the topic "{topic_label}".
 
+CRITICAL: Only extract claims that are SPECIFICALLY about "{topic_label}". These summaries may contain information about multiple topics discussed in the same conversation. Ignore claims about other entities, projects, or systems — even if they appear prominently in the source material. A claim belongs to this topic ONLY if it would make sense filed under "{topic_label}" and nowhere else.
+
 An atomic claim is a single assertion that represents one piece of learned knowledge.
 
 For each claim:
@@ -37,6 +39,7 @@ DO NOT:
 - Combine multiple assertions into one claim
 - Paraphrase source excerpts (quote verbatim)
 - Extract more than {max_claims} claims total
+- Extract claims about other topics that happen to appear in the same summaries
 
 Respond with valid JSON:
 {{

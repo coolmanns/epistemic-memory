@@ -31,13 +31,13 @@ LLM_MODEL = _env("LLM_MODEL", "qwen3-30b")
 LLM_TIMEOUT = _env("LLM_TIMEOUT", 60, cast=int)
 
 # --- Tagging ---
-SIMILARITY_THRESHOLD = _env("SIMILARITY_THRESHOLD", 0.72, cast=float)
+SIMILARITY_THRESHOLD = _env("SIMILARITY_THRESHOLD", 0.65, cast=float)
 CENTROID_UPDATE_WEIGHT = _env("CENTROID_UPDATE_WEIGHT", 0.15, cast=float)
 
 # --- Discovery (HDBSCAN) ---
 MERGE_THRESHOLD = _env("MERGE_THRESHOLD", 0.82, cast=float)
 MIN_DISCOVERY_BATCH = _env("MIN_DISCOVERY_BATCH", 15, cast=int)
-HDBSCAN_MIN_CLUSTER_SIZE = _env("HDBSCAN_MIN_CLUSTER_SIZE", 3, cast=int)
+HDBSCAN_MIN_CLUSTER_SIZE = _env("HDBSCAN_MIN_CLUSTER_SIZE", 2, cast=int)
 MAX_TOPICS_PER_RUN = _env("MAX_TOPICS_PER_RUN", 20, cast=int)
 
 # --- Orphan Reconciliation ---

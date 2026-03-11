@@ -55,19 +55,16 @@ LLM routing: Sonnet (Anthropic API) for extraction, verification, and synthesis.
 
 Synthesis documents feed back into conversation context, replacing N temporal summaries with one evolving understanding document per topic.
 
-## First Real Run
+## Current State
 
 ```
-188 summaries → 17 topics discovered → 139 claims extracted
-    → 41 deduplicated → 78 verified (1 overstated, 0 unsupported)
-    → 16 synthesis docs written to memory/topics/
+239 summaries → 24 topics → ~735 claims (active/verified)
+    → 61 syntheses → 233 contradictions logged
 ```
 
-Topics discovered (bottom-up, no predefined categories):
-Cover Image Sync, Frosted Glass Backgrounds, Epistemic Synthesis, LCM Migration,
-Emotion Scoring, Image Gallery, OAuth Fix, SEO Growth Strategy, LCM Summary Model,
-Plugin Scoping, Mission Control, Anthropic Rate Limiting, Compliance Dashboard,
-Debug Log Flood, Image Handling, Audience & Platform Analysis, SEO Site Audit
+Topics span infrastructure (Cover Image Sync, OAuth Fix, Debug Log Flood, etc.) and domain knowledge (Martin Ball, Adult in Training, Ripples of Impact, Fox Valley Plumbing, Madospeakers, Xandeum, AI Memory Architecture).
+
+Pipeline runs automatically via cron — tagging every 30 min, discovery twice daily, full synthesis daily.
 
 ## Quick Start
 
@@ -84,17 +81,22 @@ export ES_EMBED_BASE_URL=http://localhost:8086
 python -m src.runner full --json
 
 # Or individual passes
-python -m src.runner tag        # Tag new summaries (every 30 min)
-python -m src.runner discover   # Discovery + tag + label (daily)
-python -m src.runner orphan     # Orphan reconciliation (weekly)
+python -m src.runner tag           # Tag new summaries (every 30 min)
+python -m src.runner discover      # Discovery + tag + label (daily)
+python -m src.runner orphan        # Orphan reconciliation (weekly)
 
 # Phase 2 pipeline
-python -m src.runner extract    # Extract claims from tagged summaries
-python -m src.runner dedup      # Deduplicate similar claims
-python -m src.runner verify     # Verify claims against source material
-python -m src.runner synthesize # Generate synthesis docs from verified claims
-python -m src.runner write      # Write markdown files to output directory
-python -m src.runner decay      # Apply confidence decay to aging claims
+python -m src.runner extract       # Extract claims from tagged summaries
+python -m src.runner dedup         # Deduplicate similar claims
+python -m src.runner verify        # Verify claims against source material
+python -m src.runner synthesize    # Generate synthesis docs from verified claims
+python -m src.runner write         # Write markdown files to output directory
+python -m src.runner decay         # Apply confidence decay to aging claims
+
+# Phase 2.5 modules
+python -m src.runner retag                    # Re-tag all summaries (for newly seeded topics)
+python -m src.runner retag --topic-id 18      # Re-tag for specific topic only
+python -m src.runner contradictions           # Detect contradictions across all claims
 ```
 
 ## Data Model
@@ -106,10 +108,11 @@ topic_edges     -- Graph relationships between topics (weighted, not tree)
 topic_summaries -- Links topics to LCM summary IDs
 
 -- Phase 2: Claim Synthesis
-claims          -- Atomic claims with type, confidence, verification status
-claim_sources   -- Provenance: which summaries sourced each claim
-syntheses       -- Versioned synthesis docs per topic (canonical + brief)
-synthesis_runs  -- Audit log of synthesis pipeline executions
+claims               -- Atomic claims with type, confidence, verification status
+claim_sources        -- Provenance: which summaries sourced each claim
+claim_contradictions -- Pairwise contradiction records with LLM classification
+syntheses            -- Versioned synthesis docs per topic (canonical + brief)
+synthesis_runs       -- Audit log of synthesis pipeline executions
 
 -- Shared
 tagging_log     -- Audit log of all tagging/discovery runs
@@ -136,12 +139,12 @@ pytest tests/ -v -k "not Deterministic"
 # Run with slow/live tests
 pytest tests/ -v -m slow
 
-# 153 tests total: 60 Phase 1 + 93 Phase 2
+# 176 tests total: 60 Phase 1 + 93 Phase 2 + 23 Phase 2.5 (retagger + contradictions)
 ```
 
 ## White Paper
 
-See [`whitepaper-v0.3.md`](whitepaper-v0.3.md) for the full architectural specification, literature review (8 papers), failure mode analysis, and evaluation framework.
+See [`whitepaper.md`](whitepaper.md) (v0.4.1, 1120 lines) for the full architectural specification, literature review (8 papers), failure mode analysis, cost model, verification failure modes, claim reassignment protocol, synthetic benchmark sketch, and multi-source ingestion design.
 
 ### Prior Work Comparison
 
